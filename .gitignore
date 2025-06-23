@@ -11,6 +11,7 @@ dist_test/
 vis/
 val/
 lib/
+.vscode/
 
 *.egg-info
 build/
@@ -19,3 +20,4 @@ __pycache__/
 
 job_scripts/
 temp_ops/
+scripts/set_env.sh
