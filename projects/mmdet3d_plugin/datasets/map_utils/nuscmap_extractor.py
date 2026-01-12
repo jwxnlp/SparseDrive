@@ -18,7 +18,7 @@ class NuscMapExtractor(object):
         roi_size (tuple or list): bev range
     """
     def __init__(self, data_root: str, roi_size: Union[List, Tuple]) -> None:
-        self.roi_size = roi_size
+        self.roi_size = roi_size # (x_len, y_len) in lidar cs
         self.MAPS = ['boston-seaport', 'singapore-hollandvillage',
                      'singapore-onenorth', 'singapore-queenstown']
         

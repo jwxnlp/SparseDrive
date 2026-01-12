@@ -21,7 +21,7 @@ from nuscenes.prediction import PredictHelper, convert_local_coords_to_global
 
 from projects.mmdet3d_plugin.datasets.map_utils.nuscmap_extractor import NuscMapExtractor
 
-NameMapping = {
+NameMapping = { # 14 -> 10
     "movable_object.barrier": "barrier",
     "vehicle.bicycle": "bicycle",
     "vehicle.bus.bendy": "bus",
@@ -222,13 +222,14 @@ def _fill_trainval_infos(nusc,
 
     predict_helper = PredictHelper(nusc)
     for sample in mmcv.track_iter_progress(nusc.sample):
-        map_location = nusc.get('log', nusc.get('scene', sample['scene_token'])['log_token'])['location']
+        scene = nusc.get('scene', sample['scene_token'])
+        map_location = nusc.get('log', scene['log_token'])['location']
         lidar_token = sample['data']['LIDAR_TOP']
         sd_rec = nusc.get('sample_data', lidar_token)
         cs_record = nusc.get('calibrated_sensor',
                              sd_rec['calibrated_sensor_token'])
         pose_record = nusc.get('ego_pose', sd_rec['ego_pose_token'])
-        lidar_path, boxes, _ = nusc.get_sample_data(lidar_token)
+        lidar_path, boxes, _ = nusc.get_sample_data(lidar_token) # the coordinate in which the boxes are has been converted to lidar sensor coordinate
         mmcv.check_file_exist(lidar_path)
 
         info = {
@@ -270,6 +271,9 @@ def _fill_trainval_infos(nusc,
         map_geoms = nusc_map_extractor.get_map_geom(map_location, translation, rotation)
         map_annos = geom2anno(map_geoms)
         info['map_annos'] = map_annos
+        # add occ gt: https://github.com/Tsinghua-MARS-Lab/Occ3D
+        info['occ_path'] = os.path.join(nusc.dataroot, "occ3d", "gts",
+                                        scene['name'], sample['token'], "labels.npz")
 
         # obtain 6 image's information per frame
         camera_types = [
@@ -298,7 +302,7 @@ def _fill_trainval_infos(nusc,
                 sweeps.append(sweep)
                 sd_rec = nusc.get('sample_data', sd_rec['prev'])
             else:
-                break
+                break # BUG: sd_rec['prev'] == '' but sd_rec['token] != ""
         info['sweeps'] = sweeps
         # obtain annotation
         if not test:
@@ -312,7 +316,7 @@ def _fill_trainval_infos(nusc,
             rots = np.array([b.orientation.yaw_pitch_roll[0]
                              for b in boxes]).reshape(-1, 1)
             velocity = np.array(
-                [nusc.box_velocity(token)[:2] for token in sample['anns']])
+                [nusc.box_velocity(token)[:2] for token in sample['anns']]) # wcs
             # convert velo from global to lidar
             for i in range(len(boxes)):
                 velo = np.array([*velocity[i], 0.0])
@@ -348,14 +352,14 @@ def _fill_trainval_infos(nusc,
                 fut_traj_local = predict_helper.get_future_for_agent(
                     instance_token, 
                     sample['token'], 
-                    seconds=fut_ts/2, 
+                    seconds=fut_ts/2, # fut_ts frame corresponds to fut_ts/2 seconds
                     in_agent_frame=True
-                )
+                ) # [N_t, 2]
                 if fut_traj_local.shape[0] > 0:
                     box = boxes[i]
                     trans = box.center
                     rot = Quaternion(matrix=box.rotation_matrix)
-                    fut_traj_scene = convert_local_coords_to_global(fut_traj_local, trans, rot)
+                    fut_traj_scene = convert_local_coords_to_global(fut_traj_local, trans, rot) # box already is converted to lidar cs
                     valid_step = fut_traj_scene.shape[0]
                     gt_fut_trajs[i, 0] = fut_traj_scene[0] - box.center[:2]
                     gt_fut_trajs[i, 1:valid_step] = fut_traj_scene[1:] - fut_traj_scene[:-1]
@@ -367,7 +371,7 @@ def _fill_trainval_infos(nusc,
             sample_cur = sample
             ego_status = get_ego_status(nusc, nusc_can_bus, sample_cur)
             for i in range(ego_fut_ts + 1):
-                pose_mat = get_global_sensor_pose(sample_cur, nusc)
+                pose_mat = get_global_sensor_pose(sample_cur, nusc) # lidar cs --> wcs
                 ego_fut_trajs[i] = pose_mat[:3, 3]
                 ego_fut_masks[i] = 1
                 if sample_cur['next'] == '':
@@ -385,7 +389,7 @@ def _fill_trainval_infos(nusc,
             ego_fut_trajs = np.dot(rot_mat, ego_fut_trajs.T).T
             # drive command according to final fut step offset
             if ego_fut_trajs[-1][0] >= 2:
-                command = np.array([1, 0, 0])  # Turn Right
+                command = np.array([1, 0, 0])  # Turn Right coresponds to lidar cs
             elif ego_fut_trajs[-1][0] <= -2:
                 command = np.array([0, 1, 0])  # Turn Left
             else:
@@ -429,10 +433,10 @@ def get_ego_status(nusc, nusc_can_bus, sample):
         pose_data = pose_msgs[pose_index]
         steer_index = locate_message(steer_uts, ref_utime)
         steer_data = steer_msgs[steer_index]
-        ego_status.extend(pose_data["accel"]) # acceleration in ego vehicle frame, m/s/s
-        ego_status.extend(pose_data["rotation_rate"]) # angular velocity in ego vehicle frame, rad/s
-        ego_status.extend(pose_data["vel"]) # velocity in ego vehicle frame, m/s
-        ego_status.append(steer_data["value"]) # steering angle, positive: left turn, negative: right turn
+        ego_status.extend(pose_data["accel"]) # 3, acceleration in ego vehicle frame, m/s/s
+        ego_status.extend(pose_data["rotation_rate"]) # 3, angular velocity in ego vehicle frame, rad/s
+        ego_status.extend(pose_data["vel"]) # 3, velocity in ego vehicle frame, m/s
+        ego_status.append(steer_data["value"]) # 1, steering angle, positive: left turn, negative: right turn
     except:
         ego_status = [0] * 10
     
