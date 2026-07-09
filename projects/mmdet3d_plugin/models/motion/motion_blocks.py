@@ -67,15 +67,15 @@ class MotionPlanningRefinementModule(BaseModule):
 
     def forward(
         self,
-        motion_query,
-        plan_query,
-        ego_feature,
+        motion_query, # [B, det_K, M, C]
+        plan_query, # [B, 1, N_cmd*P, C]
+        ego_feature, # [B, 1, C]
         ego_anchor_embed,
     ):
         bs, num_anchor = motion_query.shape[:2]
-        motion_cls = self.motion_cls_branch(motion_query).squeeze(-1)
-        motion_reg = self.motion_reg_branch(motion_query).reshape(bs, num_anchor, self.fut_mode, self.fut_ts, 2)
-        plan_cls = self.plan_cls_branch(plan_query).squeeze(-1)
-        plan_reg = self.plan_reg_branch(plan_query).reshape(bs, 1, 3 * self.ego_fut_mode, self.ego_fut_ts, 2)
-        planning_status = self.plan_status_branch(ego_feature + ego_anchor_embed)
+        motion_cls = self.motion_cls_branch(motion_query).squeeze(-1) # [B, det_K, M]
+        motion_reg = self.motion_reg_branch(motion_query).reshape(bs, num_anchor, self.fut_mode, self.fut_ts, 2) # [B, det_K, M, 12, 2]
+        plan_cls = self.plan_cls_branch(plan_query).squeeze(-1) # [B, 1, N_cmd*P]
+        plan_reg = self.plan_reg_branch(plan_query).reshape(bs, 1, 3 * self.ego_fut_mode, self.ego_fut_ts, 2) # [B, 1, N_cmd*M, 6, 2]
+        planning_status = self.plan_status_branch(ego_feature + ego_anchor_embed) # [B, 1, 10]
         return motion_cls, motion_reg, plan_cls, plan_reg, planning_status

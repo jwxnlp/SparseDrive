@@ -42,7 +42,7 @@ class LoadMultiViewImageFromFiles(object):
         # img is of shape (h, w, c, num_views)
         img = np.stack(
             [mmcv.imread(name, self.color_type) for name in filename], axis=-1
-        )
+        ) # [900, 1600, 3, N_view]
         if self.to_float32:
             img = img.astype(np.float32)
         results["filename"] = filename
@@ -159,7 +159,7 @@ class LoadPointsFromFile(object):
         pts_filename = results["pts_filename"]
         points = self._load_points(pts_filename)
         points = points.reshape(-1, self.load_dim)
-        points = points[:, self.use_dim]
+        points = points[:, self.use_dim] # [N, 5]
         attribute_dims = None
 
         if self.shift_height:

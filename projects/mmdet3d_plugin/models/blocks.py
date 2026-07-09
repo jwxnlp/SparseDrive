@@ -109,29 +109,29 @@ class DeformableFeatureAggregation(BaseModule):
 
     def forward(
         self,
-        instance_feature: torch.Tensor,
-        anchor: torch.Tensor,
-        anchor_embed: torch.Tensor,
-        feature_maps: List[torch.Tensor],
+        instance_feature: torch.Tensor, # [B, K, C]
+        anchor: torch.Tensor, # det:[B, K, 11], map: [B, K, N_pt*2]
+        anchor_embed: torch.Tensor, # [B, K, C]
+        feature_maps: List[torch.Tensor], # [B, N_view*N_pv_pixel, C], [N_view, N_pv_lvl, 2], [N_view, N_pv_lvl]
         metas: dict,
         **kwargs: dict,
     ):
         bs, num_anchor = instance_feature.shape[:2]
-        key_points = self.kps_generator(anchor, instance_feature)
-        weights = self._get_weights(instance_feature, anchor_embed, metas)
+        key_points = self.kps_generator(anchor, instance_feature) # det:[B, K, KPT, 3], map:[B, K, KPT=N_pt*N_fixh*N_L, 3]
+        weights = self._get_weights(instance_feature, anchor_embed, metas) # [B, K, N_view, S, KPT, G]
 
         if self.use_deformable_func:
             points_2d = (
                 self.project_points(
-                    key_points,
-                    metas["projection_mat"],
-                    metas.get("image_wh"),
+                    key_points, # [B, K, KPT, 3]
+                    metas["projection_mat"], # [B, N_view, 4, 4]
+                    metas.get("image_wh"), # [B, N_view, 2]
                 )
                 .permute(0, 2, 3, 1, 4)
                 .reshape(bs, num_anchor, self.num_pts, self.num_cams, 2)
-            )
+            ) # [B, K, KPT, N_view, 2], normalized to [0, 1] range
             weights = (
-                weights.permute(0, 1, 4, 2, 3, 5)
+                weights.permute(0, 1, 4, 2, 3, 5) # [B, K, KPT, N_view, S, G]
                 .contiguous()
                 .reshape(
                     bs,
@@ -144,7 +144,7 @@ class DeformableFeatureAggregation(BaseModule):
             )
             features = DAF(*feature_maps, points_2d, weights).reshape(
                 bs, num_anchor, self.embed_dims
-            )
+            ) # [B, K, C], multi keypoint/view/scale, not multi timestamp
         else:
             features = self.feature_sampling(
                 feature_maps,
@@ -159,23 +159,23 @@ class DeformableFeatureAggregation(BaseModule):
             output = output + instance_feature
         elif self.residual_mode == "cat":
             output = torch.cat([output, instance_feature], dim=-1)
-        return output
+        return output # [B, K, 2C]
 
     def _get_weights(self, instance_feature, anchor_embed, metas=None):
         bs, num_anchor = instance_feature.shape[:2]
-        feature = instance_feature + anchor_embed
+        feature = instance_feature + anchor_embed # [B, K, C]
         if self.camera_encoder is not None:
             camera_embed = self.camera_encoder(
                 metas["projection_mat"][:, :, :3].reshape(
-                    bs, self.num_cams, -1
-                )
-            )
-            feature = feature[:, :, None] + camera_embed[:, None]
+                    bs, self.num_cams, -1 # [B, N_view, 12]
+                ) # projection_mat lidar2img [B, N_view, 4, 4]
+            ) # [B, N_view, C]
+            feature = feature[:, :, None] + camera_embed[:, None] # [B, K, N_view, C]
 
         weights = (
-            self.weights_fc(feature)
-            .reshape(bs, num_anchor, -1, self.num_groups)
-            .softmax(dim=-2)
+            self.weights_fc(feature) # [B, K, N_view, G*S*KPT]
+            .reshape(bs, num_anchor, -1, self.num_groups) # [B, K, N_view*S*KPT, G]
+            .softmax(dim=-2) # softmax cross on all sampling points correspond to an anchor
             .reshape(
                 bs,
                 num_anchor,
@@ -183,7 +183,7 @@ class DeformableFeatureAggregation(BaseModule):
                 self.num_levels,
                 self.num_pts,
                 self.num_groups,
-            )
+            ) # [B, K, N_view, S, KPT, G]
         )
         if self.training and self.attn_drop > 0:
             mask = torch.rand(
@@ -201,13 +201,13 @@ class DeformableFeatureAggregation(BaseModule):
 
         pts_extend = torch.cat(
             [key_points, torch.ones_like(key_points[..., :1])], dim=-1
-        )
+        ) # [B, K, KPT, 4]
         points_2d = torch.matmul(
             projection_mat[:, :, None, None], pts_extend[:, None, ..., None]
-        ).squeeze(-1)
+        ).squeeze(-1) # [B, N_view, K, KPT, 4]
         points_2d = points_2d[..., :2] / torch.clamp(
             points_2d[..., 2:3], min=1e-5
-        )
+        ) # [B, N_view, K, KPT, 2]
         if image_wh is not None:
             points_2d = points_2d / image_wh[:, :, None, None]
         return points_2d
@@ -288,11 +288,11 @@ class DenseDepthNet(BaseModule):
         if focal is None:
             focal = self.equal_focal
         else:
-            focal = focal.reshape(-1)
+            focal = focal.reshape(-1) # [B*N_view]
         depths = []
         for i, feat in enumerate(feature_maps[: self.num_depth_layers]):
-            depth = self.depth_layers[i](feat.flatten(end_dim=1).float()).exp()
-            depth = depth.transpose(0, -1) * focal / self.equal_focal
+            depth = self.depth_layers[i](feat.flatten(end_dim=1).float()).exp() # [B*N_view, 1, H_f, W_f]
+            depth = depth.transpose(0, -1) * focal / self.equal_focal # why transpose?
             depth = depth.transpose(0, -1)
             depths.append(depth)
         if gt_depths is not None and self.training:
@@ -377,7 +377,7 @@ class AsymmetricFFN(BaseModule):
         if self.add_identity:
             self.identity_fc = (
                 torch.nn.Identity()
-                if in_channels == embed_dims
+                if self.in_channels == embed_dims
                 else Linear(self.in_channels, embed_dims)
             )
 

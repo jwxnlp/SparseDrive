@@ -107,7 +107,7 @@ class NuscMapExtractor(object):
 
         # get dividers
         lane_dividers = self.map_explorer[location]._get_layer_line(
-                    patch_box, yaw, 'lane_divider')
+                    patch_box, yaw, 'lane_divider') # Lidar cs
         
         road_dividers = self.map_explorer[location]._get_layer_line(
                     patch_box, yaw, 'road_divider')

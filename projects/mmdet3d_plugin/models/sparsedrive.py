@@ -71,15 +71,15 @@ class SparseDrive(BaseDetector):
         if "metas" in signature(self.img_backbone.forward).parameters:
             feature_maps = self.img_backbone(img, num_cams, metas=metas)
         else:
-            feature_maps = self.img_backbone(img)
+            feature_maps = self.img_backbone(img) # L2-L5, (256, 704), #256, 512, 1024, 2048
         if self.img_neck is not None:
-            feature_maps = list(self.img_neck(feature_maps))
+            feature_maps = list(self.img_neck(feature_maps)) # L2-L5, (256, 704), #256
         for i, feat in enumerate(feature_maps):
             feature_maps[i] = torch.reshape(
                 feat, (bs, num_cams) + feat.shape[1:]
-            )
+            ) # [B, N_view, C, H_f, W_f], # L2-L5
         if return_depth and self.depth_branch is not None:
-            depths = self.depth_branch(feature_maps, metas.get("focal"))
+            depths = self.depth_branch(feature_maps, metas.get("focal")) # L2-L4, # [B*N_view, 1, H_f, W_f]
         else:
             depths = None
         if self.use_deformable_func:
@@ -90,6 +90,9 @@ class SparseDrive(BaseDetector):
 
     @force_fp32(apply_to=("img",))
     def forward(self, img, **data):
+        """
+            img: [B, N_view, C, H, W]
+        """
         if self.training:
             return self.forward_train(img, **data)
         else:

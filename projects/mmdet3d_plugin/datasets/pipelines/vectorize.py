@@ -116,6 +116,7 @@ class VectorizeMap(object):
 
                 elif geom.geom_type == 'Polygon':
                     # polygon objects will not be vectorized
+                    print(f'polygon {geom} will not be vectorized!')
                     continue
                 
                 else:
@@ -175,7 +176,7 @@ class VectorizeMap(object):
             padding = np.full([permute_num * 2 - 2, num_points, self.coords_dim], padding)
             permute_lines_array = np.concatenate((permute_lines_array, padding), axis=0)
         
-        return permute_lines_array
+        return permute_lines_array # [N_shift, N_pt, 2]
     
     def __call__(self, input_dict):
         if "map_geoms" not in input_dict:

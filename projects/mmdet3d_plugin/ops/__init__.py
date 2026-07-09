@@ -4,11 +4,11 @@ from .deformable_aggregation import DeformableAggregationFunction
 
 
 def deformable_aggregation_function(
-    feature_maps,
-    spatial_shape,
-    scale_start_index,
-    sampling_location,
-    weights,
+    feature_maps, # [B, N_view*N_pv_pixel, C]
+    spatial_shape, # [N_view, N_pv_lvl, 2]
+    scale_start_index, # [N_view, N_pv_lvl]
+    sampling_location, # [B, K, KPT, N_view, 2], normalized to [0, 1] range
+    weights, # [B, K, KPT, N_view, S, G]
 ):
     return DeformableAggregationFunction.apply(
         feature_maps,
@@ -21,11 +21,11 @@ def deformable_aggregation_function(
 
 def feature_maps_format(feature_maps, inverse=False):
     if inverse:
-        col_feats, spatial_shape, scale_start_index = feature_maps
+        col_feats, spatial_shape, scale_start_index = feature_maps # [B, N_view*N_pv_pixel, C], [N_view, N_pv_lvl, 2], [N_view, N_pv_lvl]
         num_cams, num_levels = spatial_shape.shape[:2]
 
         split_size = spatial_shape[..., 0] * spatial_shape[..., 1]
-        split_size = split_size.cpu().numpy().tolist()
+        split_size = split_size.cpu().numpy().tolist() # [N_view, N_pv_lvl]
 
         idx = 0
         cam_split = [1]
@@ -39,16 +39,16 @@ def feature_maps_format(feature_maps, inverse=False):
         mc_feat = [
             x.unflatten(1, (cam_split[i], -1))
             for i, x in enumerate(col_feats.split(cam_split_size, dim=1))
-        ]
+        ] # [[B, N_view, N_pv_pixel, C], ]
 
-        spatial_shape = spatial_shape.cpu().numpy().tolist()
+        spatial_shape = spatial_shape.cpu().numpy().tolist() # [N_view, N_pv_lvl, 2]
         mc_ms_feat = []
         shape_index = 0
         for i, feat in enumerate(mc_feat):
             feat = list(feat.split(split_size[shape_index], dim=2))
             for j, f in enumerate(feat):
-                feat[j] = f.unflatten(2, spatial_shape[shape_index][j])
-                feat[j] = feat[j].permute(0, 1, 4, 2, 3)
+                feat[j] = f.unflatten(2, spatial_shape[shape_index][j]) # [B, N_view, H_f, W_f, C]
+                feat[j] = feat[j].permute(0, 1, 4, 2, 3) # [B, N_view, C, H_f, W_f]
             mc_ms_feat.append(feat)
             shape_index += cam_split[i]
         return mc_ms_feat
@@ -67,17 +67,17 @@ def feature_maps_format(feature_maps, inverse=False):
     for i, feat in enumerate(feature_maps):
         spatial_shape.append(feat.shape[-2:])
         col_feats.append(
-            torch.reshape(feat, (bs, num_cams, feat.shape[2], -1))
+            torch.reshape(feat, (bs, num_cams, feat.shape[2], -1)) # [B, N_view, C, H_f*W_f]
         )
 
-    col_feats = torch.cat(col_feats, dim=-1).permute(0, 1, 3, 2).flatten(1, 2)
+    col_feats = torch.cat(col_feats, dim=-1).permute(0, 1, 3, 2).flatten(1, 2) # [B, N_view*N_pv_pixel, C]
     spatial_shape = [spatial_shape] * num_cams
     spatial_shape = torch.tensor(
         spatial_shape,
         dtype=torch.int64,
         device=col_feats.device,
-    )
-    scale_start_index = spatial_shape[..., 0] * spatial_shape[..., 1]
+    ) # [N_view, N_pv_lvl, 2]
+    scale_start_index = spatial_shape[..., 0] * spatial_shape[..., 1] # [N_view, N_pv_lvl]
     scale_start_index = scale_start_index.flatten().cumsum(dim=0)
     scale_start_index = torch.cat(
         [torch.tensor([0]).to(scale_start_index), scale_start_index[:-1]]
@@ -85,8 +85,8 @@ def feature_maps_format(feature_maps, inverse=False):
     scale_start_index = scale_start_index.reshape(num_cams, -1)
 
     feature_maps = [
-        col_feats,
-        spatial_shape,
-        scale_start_index,
+        col_feats, # [B, N_view*N_pv_pixel, C]
+        spatial_shape, # [N_view, N_pv_lvl, 2]
+        scale_start_index, # [N_view, N_pv_lvl]
     ]
     return feature_maps

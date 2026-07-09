@@ -57,7 +57,7 @@ class LinesL1Loss(nn.Module):
                 pred, target, weight, reduction=reduction, avg_factor=avg_factor)
         
         num_points = pred.shape[-1] // 2
-        loss = loss / num_points
+        loss = loss / num_points # loss is already mean along all dims, whether is right to still divided by N_pt here?
 
         return loss*self.loss_weight
 
@@ -83,9 +83,9 @@ class SparseLineLoss(nn.Module):
 
     def forward(
         self,
-        line,
-        line_target,
-        weight=None,
+        line, # [N_pos, N_pt*2]
+        line_target, # [N_pos, N_pt*2]
+        weight=None, # [N_pos, N_pt*2]
         avg_factor=None,
         prefix="",
         suffix="",

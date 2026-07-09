@@ -168,7 +168,7 @@ def get_available_scenes(nusc):
     print('total scene num: {}'.format(len(nusc.scene)))
     for scene in nusc.scene:
         scene_token = scene['token']
-        scene_rec = nusc.get('scene', scene_token)
+        scene_rec = nusc.get('scene', scene_token) # not necessary
         sample_rec = nusc.get('sample', scene_rec['first_sample_token'])
         sd_rec = nusc.get('sample_data', sample_rec['data']['LIDAR_TOP'])
         has_more_frames = True
@@ -354,12 +354,12 @@ def _fill_trainval_infos(nusc,
                     sample['token'], 
                     seconds=fut_ts/2, # fut_ts frame corresponds to fut_ts/2 seconds
                     in_agent_frame=True
-                ) # [N_t, 2]
+                ) # [N_t, 2], object cs
                 if fut_traj_local.shape[0] > 0:
                     box = boxes[i]
                     trans = box.center
                     rot = Quaternion(matrix=box.rotation_matrix)
-                    fut_traj_scene = convert_local_coords_to_global(fut_traj_local, trans, rot) # box already is converted to lidar cs
+                    fut_traj_scene = convert_local_coords_to_global(fut_traj_local, trans, rot) # box already is converted to lidar cs, object cs --> lidar cs
                     valid_step = fut_traj_scene.shape[0]
                     gt_fut_trajs[i, 0] = fut_traj_scene[0] - box.center[:2]
                     gt_fut_trajs[i, 1:valid_step] = fut_traj_scene[1:] - fut_traj_scene[:-1]

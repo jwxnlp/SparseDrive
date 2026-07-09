@@ -39,22 +39,22 @@ class SparsePoint3DTarget(BaseTargetWithDenoising):
 
     def sample(
         self,
-        cls_preds,
-        pts_preds,
-        cls_targets,
-        pts_targets,
+        cls_preds, # [B, K, N_cls]
+        pts_preds, # [B, K, N_pt*2]
+        cls_targets, # [[N_m,], ...B]
+        pts_targets, # [[N_m, N_shift=(N_pt-1)*2, N_pt, 2], ...B]
     ):
-        pts_targets  = [x.flatten(2, 3) if len(x.shape)==4 else x for x in pts_targets]
+        pts_targets  = [x.flatten(2, 3) if len(x.shape)==4 else x for x in pts_targets] # [[N_m, N_shift, N_pt*2], ...B]
         indices = []
         for(cls_pred, pts_pred, cls_target, pts_target) in zip(
             cls_preds, pts_preds, cls_targets, pts_targets
         ):
             # normalize to (0, 1)
-            pts_pred = self.normalize_line(pts_pred)
-            pts_target = self.normalize_line(pts_target)
+            pts_pred = self.normalize_line(pts_pred) # [K, N_pt*2]
+            pts_target = self.normalize_line(pts_target) # [N_m, N_shift, N_pt*2]
             preds=dict(lines=pts_pred, scores=cls_pred)
             gts=dict(lines=pts_target, labels=cls_target)
-            indice = self.assigner.assign(preds, gts)
+            indice = self.assigner.assign(preds, gts) # [min(K, N_m),], [min(K, N_m),], [K, N_m]
             indices.append(indice)
         
         bs, num_pred, num_cls = cls_preds.shape
@@ -157,7 +157,7 @@ class HungarianLinesAssigner(BaseAssigner):
         # compute the weighted costs
         gt_permute_idx = None # (num_preds, num_gts)
         if self.cost.reg_cost.permute:
-            cost, gt_permute_idx = self.cost(preds, gts, ignore_cls_cost)
+            cost, gt_permute_idx = self.cost(preds, gts, ignore_cls_cost) # [K, N_m], [K, N_m]
         else:
             cost = self.cost(preds, gts, ignore_cls_cost)
 

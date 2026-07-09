@@ -35,14 +35,14 @@ class LinesL1Cost(object):
         num_pred, num_gt = len(lines_pred), len(gt_lines)
         if self.permute:
             # permute-invarint labels
-            gt_lines = gt_lines.flatten(0, 1) # (num_gt*num_permute, 2*num_pts)
+            gt_lines = gt_lines.flatten(0, 1) # (num_gt*num_permute, 2*num_pts) [N_m*N_shift, N_pt*2]
 
         num_pts = lines_pred.shape[-1]//2
 
         if self.beta > 0:
-            lines_pred = lines_pred.unsqueeze(1).repeat(1, len(gt_lines), 1)
-            gt_lines = gt_lines.unsqueeze(0).repeat(num_pred, 1, 1)
-            dist_mat = smooth_l1_loss(lines_pred, gt_lines, reduction='none', beta=self.beta).sum(-1)
+            lines_pred = lines_pred.unsqueeze(1).repeat(1, len(gt_lines), 1) # [K, N_m*N_shift, N_pt*2]
+            gt_lines = gt_lines.unsqueeze(0).repeat(num_pred, 1, 1) # [K, N_m*N_shift, N_pt*2]
+            dist_mat = smooth_l1_loss(lines_pred, gt_lines, reduction='none', beta=self.beta).sum(-1) # [K, N_m*N_shift]
         
         else:
             dist_mat = torch.cdist(lines_pred, gt_lines, p=1)
@@ -52,7 +52,7 @@ class LinesL1Cost(object):
         if self.permute:
             # dist_mat: (num_pred, num_gt*num_permute)
             dist_mat = dist_mat.view(num_pred, num_gt, -1) # (num_pred, num_gt, num_permute)
-            dist_mat, gt_permute_index = torch.min(dist_mat, 2)
+            dist_mat, gt_permute_index = torch.min(dist_mat, 2) # [K, N_m]
             return dist_mat * self.weight, gt_permute_index
         
         return dist_mat * self.weight
@@ -73,7 +73,7 @@ class MapQueriesCost(object):
     def __call__(self, preds: dict, gts: dict, ignore_cls_cost: bool):
 
         # classification and bboxcost.
-        cls_cost = self.cls_cost(preds['scores'], gts['labels'])
+        cls_cost = self.cls_cost(preds['scores'], gts['labels']) # [K, N_m]
 
         # regression cost
         regkwargs = {}
@@ -86,7 +86,7 @@ class MapQueriesCost(object):
 
         reg_cost = self.reg_cost(preds['lines'], gts['lines'], **regkwargs)
         if self.reg_cost.permute:
-            reg_cost, gt_permute_idx = reg_cost
+            reg_cost, gt_permute_idx = reg_cost # [K, N_m], [K, N_m]
 
         # weighted sum of above three costs
         if ignore_cls_cost:

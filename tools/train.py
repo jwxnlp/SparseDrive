@@ -173,10 +173,6 @@ def main():
     else:
         cfg.gpu_ids = range(1) if args.gpus is None else range(args.gpus)
 
-    if args.autoscale_lr:
-        # apply the linear scaling rule (https://arxiv.org/abs/1706.02677)
-        cfg.optimizer["lr"] = cfg.optimizer["lr"] * len(cfg.gpu_ids) / 8
-
     # init distributed env first, since logger depends on the dist info.
     if args.launcher == "none":
         distributed = False
@@ -216,7 +212,11 @@ def main():
         )
         # re-set gpu_ids with distributed training mode
         _, world_size = get_dist_info()
-        cfg.gpu_ids = range(world_size)
+        cfg.gpu_ids = range(world_size) # autoscale_lr should be set after this!
+    
+    if args.autoscale_lr:
+        # apply the linear scaling rule (https://arxiv.org/abs/1706.02677)
+        cfg.optimizer["lr"] = cfg.optimizer["lr"] * len(cfg.gpu_ids) / 8
 
     # create work_dir
     mmcv.mkdir_or_exist(osp.abspath(cfg.work_dir))
@@ -224,7 +224,7 @@ def main():
     cfg.dump(osp.join(cfg.work_dir, osp.basename(args.config)))
     # init the logger before other steps
     timestamp = time.strftime("%Y%m%d_%H%M%S", time.localtime())
-    log_file = osp.join(cfg.work_dir, f"{timestamp}.log")
+    log_file = osp.join(cfg.work_dir, f"{timestamp}.log") # bug: every process will create own log file
     # specify logger name, if we still use 'mmdet', the output info will be
     # filtered and won't be saved in the log_file
     # TODO: ugly workaround to judge whether we are training det or seg model

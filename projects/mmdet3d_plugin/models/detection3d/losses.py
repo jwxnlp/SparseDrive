@@ -30,14 +30,14 @@ class SparseBox3DLoss(nn.Module):
 
     def forward(
         self,
-        box,
-        box_target,
-        weight=None,
-        avg_factor=None,
-        prefix="",
-        suffix="",
-        quality=None,
-        cls_target=None,
+        box, # [N_pos, 10]
+        box_target, # [N_pos, 10]
+        weight=None, # [N_pos, 10]
+        avg_factor=None, # int
+        prefix="", #
+        suffix="", #
+        quality=None, # [N_pos, 2]
+        cls_target=None, # [N_pos,]
         **kwargs,
     ):
         # Some categories do not distinguish between positive and negative
@@ -74,7 +74,7 @@ class SparseBox3DLoss(nn.Module):
             yns = quality[..., YNS].sigmoid()
             cns_target = torch.norm(
                 box_target[..., [X, Y, Z]] - box[..., [X, Y, Z]], p=2, dim=-1
-            )
+            ) # [N_pos, ]
             cns_target = torch.exp(-cns_target)
             cns_loss = self.loss_cns(cns, cns_target, avg_factor=avg_factor)
             output[f"{prefix}loss_cns{suffix}"] = cns_loss

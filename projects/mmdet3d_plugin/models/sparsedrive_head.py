@@ -61,7 +61,7 @@ class SparseDriveHead(BaseModule):
                 metas,
                 self.det_head.anchor_encoder,
                 self.det_head.instance_bank.mask,
-                self.det_head.instance_bank.anchor_handler,
+                self.det_head.instance_bank.anchor_handler, # keypoint generator
             )
         else:
             motion_output, planning_output = None, None

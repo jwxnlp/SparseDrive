@@ -19,12 +19,12 @@ for idx in tqdm(range(len(data_infos))):
     for cls, geoms in data_infos[idx]["map_annos"].items():
         for geom in geoms:  
             center.append(geom.mean(axis=0))
-center = np.stack(center, axis=0)
+center = np.stack(center, axis=0) # [N_line, 2], lidar cs
 center = KMeans(n_clusters=K).fit(center).cluster_centers_
 delta_y = np.linspace(-4, 4, num_sample)
 delta_x = np.zeros([num_sample])
 delta = np.stack([delta_x, delta_y], axis=-1)
-vecs = center[:, np.newaxis] + delta[np.newaxis]
+vecs = center[:, np.newaxis] + delta[np.newaxis] # [K, 1, 2] + [1, N_sample, 2]
 
 for i in range(K):
     x = vecs[i, :, 0]

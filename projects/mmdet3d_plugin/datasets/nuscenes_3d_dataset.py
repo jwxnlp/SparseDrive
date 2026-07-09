@@ -346,7 +346,7 @@ class NuScenes3DDataset(Dataset):
                 viewpad[: intrinsic.shape[0], : intrinsic.shape[1]] = intrinsic
                 lidar2img_rt = viewpad @ lidar2cam_rt.T
                 lidar2img_rts.append(lidar2img_rt)
-                lidar2cam_rts.append(lidar2cam_rt)
+                lidar2cam_rts.append(lidar2cam_rt) # lidar2cam_rt acutually is lidar2cam_rt's transpose
 
             input_dict.update(
                 dict(
@@ -367,8 +367,8 @@ class NuScenes3DDataset(Dataset):
             mask = info["valid_flag"]
         else:
             mask = info["num_lidar_pts"] > 0
-        gt_bboxes_3d = info["gt_boxes"][mask]
-        gt_names_3d = info["gt_names"][mask]
+        gt_bboxes_3d = info["gt_boxes"][mask] # [N, 7] x,y,z,l,w,h,yaw   lidar cs
+        gt_names_3d = info["gt_names"][mask] # [N, ] category_names
         gt_labels_3d = []
         for cat in gt_names_3d:
             if cat in self.CLASSES:
@@ -378,10 +378,10 @@ class NuScenes3DDataset(Dataset):
         gt_labels_3d = np.array(gt_labels_3d)
 
         if self.with_velocity:
-            gt_velocity = info["gt_velocity"][mask]
+            gt_velocity = info["gt_velocity"][mask] # [N, 2] lidar cs
             nan_mask = np.isnan(gt_velocity[:, 0])
             gt_velocity[nan_mask] = [0.0, 0.0]
-            gt_bboxes_3d = np.concatenate([gt_bboxes_3d, gt_velocity], axis=-1)
+            gt_bboxes_3d = np.concatenate([gt_bboxes_3d, gt_velocity], axis=-1) # [N, 9]
 
         anns_results = dict(
             gt_bboxes_3d=gt_bboxes_3d,
@@ -393,11 +393,11 @@ class NuScenes3DDataset(Dataset):
             anns_results["instance_inds"] = instance_inds
             
         if 'gt_agent_fut_trajs' in info:
-            anns_results['gt_agent_fut_trajs'] = info['gt_agent_fut_trajs'][mask]
-            anns_results['gt_agent_fut_masks'] = info['gt_agent_fut_masks'][mask]
+            anns_results['gt_agent_fut_trajs'] = info['gt_agent_fut_trajs'][mask] # [N, N_t, 2]
+            anns_results['gt_agent_fut_masks'] = info['gt_agent_fut_masks'][mask] # [N, N_t]
 
         if 'gt_ego_fut_trajs' in info:
-            anns_results['gt_ego_fut_trajs'] = info['gt_ego_fut_trajs']
+            anns_results['gt_ego_fut_trajs'] = info['gt_ego_fut_trajs'] # [N_t, 2]
             anns_results['gt_ego_fut_masks'] = info['gt_ego_fut_masks']
             anns_results['gt_ego_fut_cmd'] = info['gt_ego_fut_cmd']
         
@@ -405,11 +405,11 @@ class NuScenes3DDataset(Dataset):
             fut_ts = int(info['gt_ego_fut_masks'].sum())
             fut_boxes = []
             cur_scene_token = info["scene_token"]
-            cur_T_global = get_T_global(info)
+            cur_T_global = get_T_global(info) # lidar cs --> wcs
             for i in range(1, fut_ts + 1):
                 fut_info = self.data_infos[index + i]
                 fut_scene_token = fut_info["scene_token"]
-                if cur_scene_token != fut_scene_token:
+                if cur_scene_token != fut_scene_token: # not in same scene
                     break
                 if self.use_valid_flag:
                     mask = fut_info["valid_flag"]
@@ -418,7 +418,7 @@ class NuScenes3DDataset(Dataset):
 
                 fut_gt_bboxes_3d = fut_info["gt_boxes"][mask]
                 
-                fut_T_global = get_T_global(fut_info)
+                fut_T_global = get_T_global(fut_info) # fut lidar cs --> wcs
                 T_fut2cur = np.linalg.inv(cur_T_global) @ fut_T_global
 
                 center = fut_gt_bboxes_3d[:, :3] @ T_fut2cur[:3, :3].T + T_fut2cur[:3, 3]

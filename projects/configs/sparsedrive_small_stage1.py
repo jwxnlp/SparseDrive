@@ -163,7 +163,7 @@ model = dict(
                     "refine",
                 ]
                 * (num_decoder - num_single_frame_decoder)
-            )[2:],
+            )[2:],# the first two leyer is not used, because content query is zero, so it's still zero after first two layers
             temp_graph_model=dict(
                 type="MultiheadFlashAttention",
                 embed_dims=embed_dims if not decouple_attn else embed_dims * 2,
@@ -276,7 +276,7 @@ model = dict(
                 anchor_handler=dict(type="SparsePoint3DKeyPointsGenerator"),
                 num_temp_instances=0 if temporal_map else -1,
                 confidence_decay=0.6,
-                feat_grad=True,
+                feat_grad=True, # False in det
             ),
             anchor_encoder=dict(
                 type="SparsePoint3DEncoder",

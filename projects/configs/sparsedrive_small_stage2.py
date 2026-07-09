@@ -212,7 +212,7 @@ model = dict(
                         [0, -0.45, 0],
                         [0, 0, 0.45],
                         [0, 0, -0.45],
-                    ],
+                    ], # [7, 3], coordinate in object space
                 ),
             ),
             refine_layer=dict(
@@ -312,7 +312,7 @@ model = dict(
                 batch_first=True,
                 dropout=drop_out,
             )
-            if temporal_map
+            if temporal_map # true
             else None,
             graph_model=dict(
                 type="MultiheadFlashAttention",
@@ -718,4 +718,5 @@ evaluation = dict(
     eval_mode=eval_mode,
 )
 # ================== pretrained model ========================
-load_from = 'ckpt/sparsedrive_stage1.pth'
+# load_from = 'ckpt/sparsedrive_stage1.pth'
+load_from = 'work_dirs/sparsedrive_small_stage1_20250628/latest.pth'

@@ -16,17 +16,17 @@ __all__ = ["SparseBox3DTarget"]
 class SparseBox3DTarget(BaseTargetWithDenoising):
     def __init__(
         self,
-        cls_weight=2.0,
+        cls_weight=2.0, #-
         alpha=0.25,
         gamma=2,
         eps=1e-12,
-        box_weight=0.25,
-        reg_weights=None,
-        cls_wise_reg_weights=None,
+        box_weight=0.25, #-
+        reg_weights=None, # [2.0] * 3 + [0.5] * 3 + [0.0] * 4,
+        cls_wise_reg_weights=None, #
         num_dn_groups=0,
         dn_noise_scale=0.5,
-        max_dn_gt=32,
-        add_neg_dn=True,
+        max_dn_gt=32, #-
+        add_neg_dn=True, #-
         num_temp_dn_groups=0,
     ):
         super(SparseBox3DTarget, self).__init__(
@@ -50,14 +50,14 @@ class SparseBox3DTarget(BaseTargetWithDenoising):
         for box in box_target:
             output = torch.cat(
                 [
-                    box[..., [X, Y, Z]],
+                    box[..., [X, Y, Z]], # [N_a, 3]
                     box[..., [W, L, H]].log(),
-                    torch.sin(box[..., YAW]).unsqueeze(-1),
+                    torch.sin(box[..., YAW]).unsqueeze(-1), # [N_a, 1]
                     torch.cos(box[..., YAW]).unsqueeze(-1),
-                    box[..., YAW + 1 :],
+                    box[..., YAW + 1 :], # [N_a, 2], vx, vy
                 ],
                 dim=-1,
-            )
+            ) # [N_a, 10]
             if device is not None:
                 output = output.to(device=device)
             outputs.append(output)
@@ -65,38 +65,38 @@ class SparseBox3DTarget(BaseTargetWithDenoising):
 
     def sample(
         self,
-        cls_pred,
-        box_pred,
-        cls_target,
-        box_target,
+        cls_pred, # [B, K, N_cls]
+        box_pred, # [B, K, 10]
+        cls_target, # [[N_a,], ...B]
+        box_target, # [[N_a, 9], ...B]
     ):
         bs, num_pred, num_cls = cls_pred.shape
 
-        cls_cost = self._cls_cost(cls_pred, cls_target)
+        cls_cost = self._cls_cost(cls_pred, cls_target) # [[K, N_a], ...B]
 
-        box_target = self.encode_reg_target(box_target, box_pred.device)
+        box_target = self.encode_reg_target(box_target, box_pred.device) # [[N_a, 10], ...B]
 
         instance_reg_weights = []
         for i in range(len(box_target)):
             weights = torch.logical_not(box_target[i].isnan()).to(
                 dtype=box_target[i].dtype
-            )
+            ) # [N_a, 10]
             if self.cls_wise_reg_weights is not None:
                 for cls, weight in self.cls_wise_reg_weights.items():
                     weights = torch.where(
-                        (cls_target[i] == cls)[:, None],
-                        weights.new_tensor(weight),
+                        (cls_target[i] == cls)[:, None], # [N_a, 1]
+                        weights.new_tensor(weight), # [10]
                         weights,
                     )
             instance_reg_weights.append(weights)
-        box_cost = self._box_cost(box_pred, box_target, instance_reg_weights)
+        box_cost = self._box_cost(box_pred, box_target, instance_reg_weights) # [[K, N_a], ...B]
 
-        indices = []
+        indices = [] # [[[N_a,], [N_a,]], ...B]
         for i in range(bs):
             if cls_cost[i] is not None and box_cost[i] is not None:
                 cost = (cls_cost[i] + box_cost[i]).detach().cpu().numpy()
                 cost = np.where(np.isneginf(cost) | np.isnan(cost), 1e8, cost)
-                assign = linear_sum_assignment(cost)
+                assign = linear_sum_assignment(cost) # [K, N_a]
                 indices.append(
                     [cls_pred.new_tensor(x, dtype=torch.int64) for x in assign]
                 )
@@ -105,7 +105,7 @@ class SparseBox3DTarget(BaseTargetWithDenoising):
 
         output_cls_target = (
             cls_target[0].new_ones([bs, num_pred], dtype=torch.long) * num_cls
-        )
+        ) # [B, K]
         output_box_target = box_pred.new_zeros(box_pred.shape)
         output_reg_weights = box_pred.new_zeros(box_pred.shape)
         for i, (pred_idx, target_idx) in enumerate(indices):
@@ -131,12 +131,12 @@ class SparseBox3DTarget(BaseTargetWithDenoising):
                     * cls_pred[i].pow(self.gamma)
                 )
                 pos_cost = (
-                    -(cls_pred[i] + self.eps).log()
+                    -(cls_pred[i] + self.eps).log() # [K, N_cls]
                     * self.alpha
                     * (1 - cls_pred[i]).pow(self.gamma)
                 )
                 cost.append(
-                    (pos_cost[:, cls_target[i]] - neg_cost[:, cls_target[i]])
+                    (pos_cost[:, cls_target[i]] - neg_cost[:, cls_target[i]]) # [K, N_a]
                     * self.cls_weight
                 )
             else:
@@ -150,11 +150,11 @@ class SparseBox3DTarget(BaseTargetWithDenoising):
             if len(box_target[i]) > 0:
                 cost.append(
                     torch.sum(
-                        torch.abs(box_pred[i, :, None] - box_target[i][None])
-                        * instance_reg_weights[i][None]
-                        * box_pred.new_tensor(self.reg_weights),
+                        torch.abs(box_pred[i, :, None] - box_target[i][None]) # [K, 1, 10], [1, N_a, 10]
+                        * instance_reg_weights[i][None] # [1, N_a, 10]
+                        * box_pred.new_tensor(self.reg_weights), # [10,]
                         dim=-1,
-                    )
+                    ) # [K, N_a]
                     * self.box_weight
                 )
             else:

@@ -6,17 +6,17 @@ __all__ = ["MotionTarget", "PlanningTarget"]
 
 
 def get_cls_target(
-    reg_preds, 
-    reg_target,
-    reg_weight,
+    reg_preds, # [B, det_K, M, 12, 2]
+    reg_target, # [B, det_K, 12, 2]
+    reg_weight, # [B, det_K, 12]
 ):
     bs, num_pred, mode, ts, d = reg_preds.shape
-    reg_preds_cum = reg_preds.cumsum(dim=-2)
+    reg_preds_cum = reg_preds.cumsum(dim=-2) # motion prediction is also delta between neighbor frames
     reg_target_cum = reg_target.cumsum(dim=-2)
-    dist = torch.linalg.norm(reg_target_cum.unsqueeze(2) - reg_preds_cum, dim=-1)
+    dist = torch.linalg.norm(reg_target_cum.unsqueeze(2) - reg_preds_cum, dim=-1) # [B, det_K, M, 12]
     dist = dist * reg_weight.unsqueeze(2)
-    dist = dist.mean(dim=-1)
-    mode_idx = torch.argmin(dist, dim=-1)
+    dist = dist.mean(dim=-1) # [B, det_K, M]
+    mode_idx = torch.argmin(dist, dim=-1) # [B, det_K]
     return mode_idx
 
 def get_best_reg(
@@ -45,9 +45,9 @@ class MotionTarget():
 
     def sample(
         self,
-        reg_pred,
-        gt_reg_target,
-        gt_reg_mask,
+        reg_pred, # [B, det_K, M, 12, 2]
+        gt_reg_target, # [[N_a, 12, 2], ...B]
+        gt_reg_mask, # [[N_a, 12], ...B]
         motion_loss_cache,
     ):
         bs, num_anchor, mode, ts, d = reg_pred.shape
@@ -62,7 +62,7 @@ class MotionTarget():
             reg_weight[i, pred_idx] = gt_reg_mask[i][target_idx]
             num_pos += len(pred_idx)
         
-        cls_target = get_cls_target(reg_pred, reg_target, reg_weight)
+        cls_target = get_cls_target(reg_pred, reg_target, reg_weight) # [B, det_K]
         cls_weight = reg_weight.any(dim=-1)
         best_reg = get_best_reg(reg_pred, reg_target, reg_weight)
 
@@ -82,25 +82,25 @@ class PlanningTarget():
 
     def sample(
         self,
-        cls_pred,
-        reg_pred,
-        gt_reg_target,
-        gt_reg_mask,
+        cls_pred, # [B, 1, N_cmd*P]
+        reg_pred, # [B, 1, N_cmd*P, 6, 2]
+        gt_reg_target, # [B, 6, 2]
+        gt_reg_mask, # [B, 6]
         data,
     ):
-        gt_reg_target = gt_reg_target.unsqueeze(1)
-        gt_reg_mask = gt_reg_mask.unsqueeze(1)
+        gt_reg_target = gt_reg_target.unsqueeze(1) # [B, 1, 6, 2]
+        gt_reg_mask = gt_reg_mask.unsqueeze(1) # [B, 1, 6]
 
         bs = reg_pred.shape[0]
         bs_indices = torch.arange(bs, device=reg_pred.device)
-        cmd = data['gt_ego_fut_cmd'].argmax(dim=-1)
+        cmd = data['gt_ego_fut_cmd'].argmax(dim=-1) # [B,], 0: right, 1: left, 2: straight
 
-        cls_pred = cls_pred.reshape(bs, 3, 1, self.ego_fut_mode)
-        reg_pred = reg_pred.reshape(bs, 3, 1, self.ego_fut_mode, self.ego_fut_ts, 2)
-        cls_pred = cls_pred[bs_indices, cmd]
-        reg_pred = reg_pred[bs_indices, cmd]
-        cls_target = get_cls_target(reg_pred, gt_reg_target, gt_reg_mask)
-        cls_weight = gt_reg_mask.any(dim=-1)
+        cls_pred = cls_pred.reshape(bs, 3, 1, self.ego_fut_mode) # [B, N_cmd, 1, P]
+        reg_pred = reg_pred.reshape(bs, 3, 1, self.ego_fut_mode, self.ego_fut_ts, 2) # [B, N_cmd, 1, P, 6, 2]
+        cls_pred = cls_pred[bs_indices, cmd] # [B, 1, P]
+        reg_pred = reg_pred[bs_indices, cmd] # [B, 1, P, 6, 2]
+        cls_target = get_cls_target(reg_pred, gt_reg_target, gt_reg_mask) # [B, 1]
+        cls_weight = gt_reg_mask.any(dim=-1) # [B, 1]
         best_reg = get_best_reg(reg_pred, gt_reg_target, gt_reg_mask)
 
         return cls_pred, cls_target, cls_weight, best_reg, gt_reg_target, gt_reg_mask

@@ -73,13 +73,13 @@ class SparsePoint3DRefinementModule(BaseModule):
 
     def forward(
         self,
-        instance_feature: torch.Tensor,
-        anchor: torch.Tensor,
+        instance_feature: torch.Tensor, # [B, K, C]
+        anchor: torch.Tensor, # [B, K, N_pt*2]
         anchor_embed: torch.Tensor,
         time_interval: torch.Tensor = 1.0,
         return_cls=True,
     ):
-        output = self.layers(instance_feature + anchor_embed)
+        output = self.layers(instance_feature + anchor_embed) # [B, K, N_pt*2]
         output = output + anchor
         if return_cls:
             assert self.with_cls_branch, "Without classification layers !!!"
@@ -96,9 +96,9 @@ class SparsePoint3DKeyPointsGenerator(BaseModule):
         self,
         embed_dims: int = 256,
         num_sample: int = 20,
-        num_learnable_pts: int = 0,
-        fix_height: Tuple = (0,),
-        ground_height: int = 0,
+        num_learnable_pts: int = 0, # 3
+        fix_height: Tuple = (0,), # (0, 0.5, -0.5, 1, -1)
+        ground_height: int = 0, # -1.84023
     ):
         super(SparsePoint3DKeyPointsGenerator, self).__init__()
         self.embed_dims = embed_dims
@@ -117,32 +117,32 @@ class SparsePoint3DKeyPointsGenerator(BaseModule):
 
     def forward(
         self,
-        anchor,
-        instance_feature=None,
+        anchor, # [B, K, N_pt*2]
+        instance_feature=None, # [B, K, C]
         T_cur2temp_list=None,
         cur_timestamp=None,
         temp_timestamps=None,
     ):
         assert self.num_learnable_pts > 0, 'No learnable pts'
         bs, num_anchor, _ = anchor.shape
-        key_points = anchor.view(bs, num_anchor, self.num_sample, -1)
+        key_points = anchor.view(bs, num_anchor, self.num_sample, -1) # [B, K, N_pt, 2]
         offset = (
-            self.learnable_fc(instance_feature)
+            self.learnable_fc(instance_feature) # [B, K, N_pt*N_fixh*N_L*2], offset in xy plane
             .reshape(bs, num_anchor, self.num_sample, len(self.fix_height), self.num_learnable_pts, 2)
         )        
-        key_points = offset + key_points[..., None, None, :]
+        key_points = offset + key_points[..., None, None, :] # [B, K, N_pt, N_fixh, N_L, 2]
         key_points = torch.cat(
             [
                 key_points,
                 key_points.new_full(key_points.shape[:-1]+(1,), fill_value=self.ground_height),
             ],
             dim=-1,
-        )
-        fix_height = key_points.new_tensor(self.fix_height)
+        ) # [B, K, N_pt, N_fixh, N_L, 3]
+        fix_height = key_points.new_tensor(self.fix_height) # [N_fixh]
         height_offset = key_points.new_zeros([len(fix_height), 2])
-        height_offset = torch.cat([height_offset, fix_height[:,None]], dim=-1)
+        height_offset = torch.cat([height_offset, fix_height[:,None]], dim=-1) # [N_fixh, 3]
         key_points = key_points + height_offset[None, None, None, :, None]
-        key_points = key_points.flatten(2, 4)
+        key_points = key_points.flatten(2, 4) # [B, K, N_pt*N_fixh*N_L, 3]
         if (
             cur_timestamp is None
             or temp_timestamps is None
@@ -172,8 +172,8 @@ class SparsePoint3DKeyPointsGenerator(BaseModule):
     # @staticmethod
     def anchor_projection(
         self,
-        anchor,
-        T_src2dst_list,
+        anchor, # [B, K_temp, N_pt*2]
+        T_src2dst_list, # [[B,4,4], ]
         src_timestamp=None,
         dst_timestamps=None,
         time_intervals=None,
@@ -182,18 +182,18 @@ class SparsePoint3DKeyPointsGenerator(BaseModule):
         for i in range(len(T_src2dst_list)):
             dst_anchor = anchor.clone()
             bs, num_anchor, _ = anchor.shape
-            dst_anchor = dst_anchor.reshape(bs, num_anchor, self.num_sample, -1).flatten(1, 2)
+            dst_anchor = dst_anchor.reshape(bs, num_anchor, self.num_sample, -1).flatten(1, 2) # [B, K_temp*N_pt, 2]
             T_src2dst = torch.unsqueeze(
                 T_src2dst_list[i].to(dtype=anchor.dtype), dim=1
-            )
+            ) # [B, 1, 4, 4]
 
             dst_anchor = (
                 torch.matmul(
                     T_src2dst[..., :2, :2], dst_anchor[..., None]
-                ).squeeze(dim=-1)
-                + T_src2dst[..., :2, 3]
-            )
+                ).squeeze(dim=-1) # [B, K_temp*N_pt, 2]
+                + T_src2dst[..., :2, 3] # not model 3d transformation
+            ) # static object, not use velocity and time_intervals
 
-            dst_anchor = dst_anchor.reshape(bs, num_anchor, self.num_sample, -1).flatten(2, 3)
+            dst_anchor = dst_anchor.reshape(bs, num_anchor, self.num_sample, -1).flatten(2, 3) # [B, K_temp, N_pt*2]
             dst_anchors.append(dst_anchor)
         return dst_anchors

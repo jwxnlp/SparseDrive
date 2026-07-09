@@ -11,7 +11,7 @@ __all__ = ["InstanceBank"]
 
 def topk(confidence, k, *inputs):
     bs, N = confidence.shape[:2]
-    confidence, indices = torch.topk(confidence, k, dim=1)
+    confidence, indices = torch.topk(confidence, k, dim=1) # [B, k]
     indices = (
         indices + torch.arange(bs, device=indices.device)[:, None] * N
     ).reshape(-1)
@@ -25,15 +25,15 @@ def topk(confidence, k, *inputs):
 class InstanceBank(nn.Module):
     def __init__(
         self,
-        num_anchor,
-        embed_dims,
-        anchor,
-        anchor_handler=None,
-        num_temp_instances=0,
-        default_time_interval=0.5,
-        confidence_decay=0.6,
+        num_anchor, # det: 900 , map: 100
+        embed_dims, #
+        anchor, # path to pkl
+        anchor_handler=None, #
+        num_temp_instances=0, # det:600, map:33
+        default_time_interval=0.5, # 0.5s/frame, 2HZ
+        confidence_decay=0.6, #-
         anchor_grad=True,
-        feat_grad=True,
+        feat_grad=True, # det:False, map:True
         max_time_interval=2,
     ):
         super(InstanceBank, self).__init__()
@@ -48,11 +48,11 @@ class InstanceBank(nn.Module):
             assert hasattr(anchor_handler, "anchor_projection")
         self.anchor_handler = anchor_handler
         if isinstance(anchor, str):
-            anchor = np.load(anchor)
+            anchor = np.load(anchor) # det:[900, 11]， x,y,z,1,1,1,1,0,0,0,0  map:[100, N_pt, 2]
         elif isinstance(anchor, (list, tuple)):
             anchor = np.array(anchor)
         if len(anchor.shape) == 3: # for map
-            anchor = anchor.reshape(anchor.shape[0], -1)
+            anchor = anchor.reshape(anchor.shape[0], -1) # [K, N_pt*2]
         self.num_anchor = min(len(anchor), num_anchor)
         anchor = anchor[:num_anchor]
         self.anchor = nn.Parameter(
@@ -62,7 +62,7 @@ class InstanceBank(nn.Module):
         self.anchor_init = anchor
         self.instance_feature = nn.Parameter(
             torch.zeros([self.anchor.shape[0], self.embed_dims]),
-            requires_grad=feat_grad,
+            requires_grad=feat_grad, # [K, C], not update feat in det training! but update in map training
         )
         self.reset()
 
@@ -72,20 +72,20 @@ class InstanceBank(nn.Module):
             torch.nn.init.xavier_uniform_(self.instance_feature.data, gain=1)
 
     def reset(self):
-        self.cached_feature = None
-        self.cached_anchor = None
-        self.metas = None
-        self.mask = None
-        self.confidence = None
-        self.temp_confidence = None
-        self.instance_id = None
-        self.prev_id = 0
+        self.cached_feature = None # [B, K_temp, C]
+        self.cached_anchor = None # [B, K_temp, 11]
+        self.metas = None # batch data meta from prev batch
+        self.mask = None # [B,] # whether cur sample still in sequence
+        self.confidence = None # [B, K_temp]
+        self.temp_confidence = None # [B, K]
+        self.instance_id = None # [B, K_temp+(K-K_temp)], tracked + new_born
+        self.prev_id = 0 # int
 
     def get(self, batch_size, metas=None, dn_metas=None):
         instance_feature = torch.tile(
             self.instance_feature[None], (batch_size, 1, 1)
-        )
-        anchor = torch.tile(self.anchor[None], (batch_size, 1, 1))
+        ) # [B, K, C]
+        anchor = torch.tile(self.anchor[None], (batch_size, 1, 1)) # det:[B, K, 11], map: [B, K, N_pt*2]
 
         if (
             self.cached_anchor is not None
@@ -100,17 +100,17 @@ class InstanceBank(nn.Module):
                 T_temp2cur = self.cached_anchor.new_tensor(
                     np.stack(
                         [
-                            x["T_global_inv"]
-                            @ self.metas["img_metas"][i]["T_global"]
+                            x["T_global_inv"] # [4, 4], global2lidar
+                            @ self.metas["img_metas"][i]["T_global"] # [4, 4], prev_lidar2global
                             for i, x in enumerate(metas["img_metas"])
                         ]
-                    )
+                    ) # [B, 4, 4]
                 )
                 self.cached_anchor = self.anchor_handler.anchor_projection(
-                    self.cached_anchor,
+                    self.cached_anchor, # [B, K_temp, 11], temp cs
                     [T_temp2cur],
                     time_intervals=[-time_interval],
-                )[0]
+                )[0] # [B, K_temp, 11], cur lidar cs
 
             if (
                 self.anchor_handler is not None
@@ -135,7 +135,7 @@ class InstanceBank(nn.Module):
             self.reset()
             time_interval = instance_feature.new_tensor(
                 [self.default_time_interval] * batch_size
-            )
+            ) # [B,]
 
         return (
             instance_feature,
@@ -159,16 +159,16 @@ class InstanceBank(nn.Module):
             confidence = confidence[:, : self.num_anchor]
 
         N = self.num_anchor - self.num_temp_instances
-        confidence = confidence.max(dim=-1).values
+        confidence = confidence.max(dim=-1).values # [B, K]
         _, (selected_feature, selected_anchor) = topk(
             confidence, N, instance_feature, anchor
-        )
+        ) # _, ([B, N=K-K_temp, C], [B, N, 11])
         selected_feature = torch.cat(
             [self.cached_feature, selected_feature], dim=1
-        )
+        ) # [B, K, C]
         selected_anchor = torch.cat(
             [self.cached_anchor, selected_anchor], dim=1
-        )
+        ) # [B, K, 11]
         instance_feature = torch.where(
             self.mask[:, None, None], selected_feature, instance_feature
         )
@@ -177,7 +177,7 @@ class InstanceBank(nn.Module):
             self.mask[:, None],
             self.confidence,
             self.confidence.new_tensor(0)
-        )
+        ) # [B, K_temp]
         if self.instance_id is not None:
             self.instance_id = torch.where(
                 self.mask[:, None],
@@ -194,11 +194,11 @@ class InstanceBank(nn.Module):
 
     def cache(
         self,
-        instance_feature,
-        anchor,
-        confidence,
-        metas=None,
-        feature_maps=None,
+        instance_feature, # [B, K, C]
+        anchor, # [B, K, 11]
+        confidence, # [B, K, N_cls]
+        metas=None, #
+        feature_maps=None, #
     ):
         if self.num_temp_instances <= 0:
             return
@@ -207,7 +207,7 @@ class InstanceBank(nn.Module):
         confidence = confidence.detach()
 
         self.metas = metas
-        confidence = confidence.max(dim=-1).values.sigmoid()
+        confidence = confidence.max(dim=-1).values.sigmoid() # [B, K], cur
         if self.confidence is not None:
             confidence[:, : self.num_temp_instances] = torch.maximum(
                 self.confidence * self.confidence_decay,
@@ -221,7 +221,7 @@ class InstanceBank(nn.Module):
         ) = topk(confidence, self.num_temp_instances, instance_feature, anchor)
 
     def get_instance_id(self, confidence, anchor=None, threshold=None):
-        confidence = confidence.max(dim=-1).values.sigmoid()
+        confidence = confidence.max(dim=-1).values.sigmoid() # [B, K]
         instance_id = confidence.new_full(confidence.shape, -1).long()
 
         if (
@@ -238,7 +238,7 @@ class InstanceBank(nn.Module):
         instance_id[torch.where(mask)] = new_ids
         self.prev_id += num_new_instance
         self.update_instance_id(instance_id, confidence)
-        return instance_id
+        return instance_id # [B, K]
 
     def update_instance_id(self, instance_id=None, confidence=None):
         if self.temp_confidence is None:
@@ -250,10 +250,10 @@ class InstanceBank(nn.Module):
             temp_conf = self.temp_confidence
         instance_id = topk(temp_conf, self.num_temp_instances, instance_id)[1][
             0
-        ]
+        ] # [B, K_temp, 1]
         instance_id = instance_id.squeeze(dim=-1)
         self.instance_id = F.pad(
             instance_id,
             (0, self.num_anchor - self.num_temp_instances),
             value=-1,
-        )
+        ) # [B, K]

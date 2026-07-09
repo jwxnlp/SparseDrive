@@ -45,13 +45,13 @@ class Sparse4DHead(BaseModule):
         gt_cls_key: str = "gt_labels_3d",
         gt_reg_key: str = "gt_bboxes_3d",
         gt_id_key: str = "instance_id",
-        with_instance_id: bool = True,
+        with_instance_id: bool = True, # False for map
         task_prefix: str = 'det',
-        reg_weights: List = None,
+        reg_weights: List = None, # det:[2.0] * 3 + [1.0] * 7, map: [1.0] * 40
         operation_order: Optional[List[str]] = None,
         cls_threshold_to_reg: float = -1,
         dn_loss_weight: float = 5.0,
-        decouple_attn: bool = True,
+        decouple_attn: bool = True, # det: True, map:False
         init_cfg: dict = None,
         **kwargs,
     ):
@@ -148,7 +148,7 @@ class Sparse4DHead(BaseModule):
         **kwargs,
     ):
         if self.decouple_attn:
-            query = torch.cat([query, query_pos], dim=-1)
+            query = torch.cat([query, query_pos], dim=-1) # [B, K, 2C]
             if key is not None:
                 key = torch.cat([key, key_pos], dim=-1)
             query_pos, key_pos = None, None
@@ -167,7 +167,7 @@ class Sparse4DHead(BaseModule):
 
     def forward(
         self,
-        feature_maps: Union[torch.Tensor, List],
+        feature_maps: Union[torch.Tensor, List], # [B, N_view*N_pv_pixel, C], [N_view, N_pv_lvl, 2], [N_view, N_pv_lvl]
         metas: dict,
     ):
         if isinstance(feature_maps, torch.Tensor):
@@ -181,11 +181,11 @@ class Sparse4DHead(BaseModule):
         ):
             self.sampler.dn_metas = None
         (
-            instance_feature,
-            anchor,
-            temp_instance_feature,
-            temp_anchor,
-            time_interval,
+            instance_feature, # [B, K, C]
+            anchor, # det:[B, K, 11], map: [B, K, N_pt*2]
+            temp_instance_feature, # [B, K_temp, C]
+            temp_anchor, # [B, K_temp, 11] prev in cur cs, map: [B, K_temp, N_pt*2]
+            time_interval, # [B,]
         ) = self.instance_bank.get(
             batch_size, metas, dn_metas=self.sampler.dn_metas
         )
@@ -202,13 +202,13 @@ class Sparse4DHead(BaseModule):
                 gt_instance_id = [
                     torch.from_numpy(x[self.gt_id_key]).cuda()
                     for x in metas["img_metas"]
-                ]
+                ] # [[N_a], ...B]
             else:
                 gt_instance_id = None
             dn_metas = self.sampler.get_dn_anchors(
-                metas[self.gt_cls_key],
-                metas[self.gt_reg_key],
-                gt_instance_id,
+                metas[self.gt_cls_key], # det:[[N_a], ...B], map: [[N_m], ...B]
+                metas[self.gt_reg_key], # det:[[N_a, 9], ...B], map:[[N_m, N_shift=(N_pt-1)*2, N_pt, 2], ...B]
+                gt_instance_id, # det:[[N_a], ...B], map:None
             )
         if dn_metas is not None:
             (
@@ -249,7 +249,7 @@ class Sparse4DHead(BaseModule):
             attn_mask[:num_free_instance, :num_free_instance] = False
             attn_mask[num_free_instance:, num_free_instance:] = dn_attn_mask
 
-        anchor_embed = self.anchor_encoder(anchor)
+        anchor_embed = self.anchor_encoder(anchor) # [B, K, C]
         if temp_anchor is not None:
             temp_anchor_embed = self.anchor_encoder(temp_anchor)
         else:
@@ -265,41 +265,41 @@ class Sparse4DHead(BaseModule):
             elif op == "temp_gnn":
                 instance_feature = self.graph_model(
                     i,
-                    instance_feature,
-                    temp_instance_feature,
-                    temp_instance_feature,
-                    query_pos=anchor_embed,
+                    instance_feature, # [B, K, C]
+                    temp_instance_feature, # [B, K_temp, C]
+                    temp_instance_feature, # [B, K_temp, C]
+                    query_pos=anchor_embed, # [B, K, C]
                     key_pos=temp_anchor_embed,
                     attn_mask=attn_mask
                     if temp_instance_feature is None
                     else None,
-                )
+                ) # [B, K, C]
             elif op == "gnn":
                 instance_feature = self.graph_model(
                     i,
-                    instance_feature,
-                    value=instance_feature,
-                    query_pos=anchor_embed,
+                    instance_feature, # [B, K, C]
+                    value=instance_feature, # [B, K, C]
+                    query_pos=anchor_embed, # [B, K, C]
                     attn_mask=attn_mask,
-                )
+                ) # [B, K, C]
             elif op == "norm" or op == "ffn":
-                instance_feature = self.layers[i](instance_feature)
+                instance_feature = self.layers[i](instance_feature) # [B, K, C]
             elif op == "deformable":
                 instance_feature = self.layers[i](
-                    instance_feature,
-                    anchor,
-                    anchor_embed,
+                    instance_feature, # [B, K, C]
+                    anchor, # det:[B, K, 11], map: [B, K, N_pt*2]
+                    anchor_embed, # [B, K, C]
                     feature_maps,
                     metas,
-                )
+                ) # [B, K, 2C]
             elif op == "refine":
                 anchor, cls, qt = self.layers[i](
-                    instance_feature,
-                    anchor,
-                    anchor_embed,
-                    time_interval=time_interval,
+                    instance_feature, # [B, K, C]
+                    anchor, # det:[B, K, 11], add predicted delta, map: [B, K, N_pt*2], add predicted delta
+                    anchor_embed, # [B, K, C]
+                    time_interval=time_interval, # [B,]
                     return_cls=True,
-                )
+                ) # det:[B, K, 11] map: [B, K, N_pt*2], [B, K, N_cls], qt: (det:[B, K, 2], centerness, yawness map: None)
                 prediction.append(anchor)
                 classification.append(cls)
                 quality.append(qt)
@@ -336,7 +336,7 @@ class Sparse4DHead(BaseModule):
                 ):
                     temp_anchor_embed = anchor_embed[
                         :, : self.instance_bank.num_temp_instances
-                    ]
+                    ] # why update only temp_anchor_embed and not update temp_anchor?
             else:
                 raise NotImplementedError(f"{op} is not supported.")
 
@@ -406,30 +406,30 @@ class Sparse4DHead(BaseModule):
         if self.with_instance_id:
             instance_id = self.instance_bank.get_instance_id(
                 cls, anchor, self.decoder.score_threshold
-            )
+            ) # [B, K]
             output["instance_id"] = instance_id
         return output
 
     @force_fp32(apply_to=("model_outs"))
     def loss(self, model_outs, data, feature_maps=None):
         # ===================== prediction losses ======================
-        cls_scores = model_outs["classification"]
-        reg_preds = model_outs["prediction"]
-        quality = model_outs["quality"]
+        cls_scores = model_outs["classification"] # [[B, K, N_cls], ...N_layer]
+        reg_preds = model_outs["prediction"] # [det:[B, K, 11] map: [B, K, N_pt*2], ...N_layer]
+        quality = model_outs["quality"] # [det:[B, K, 2] map: None, ...N_layer]
         output = {}
         for decoder_idx, (cls, reg, qt) in enumerate(
             zip(cls_scores, reg_preds, quality)
         ):
             reg = reg[..., : len(self.reg_weights)]
             cls_target, reg_target, reg_weights = self.sampler.sample(
-                cls,
-                reg,
-                data[self.gt_cls_key],
-                data[self.gt_reg_key],
-            )
+                cls, # [B, K, N_cls]
+                reg, # [det:[B, K, 10] map: [B, K, N_pt*2]
+                data[self.gt_cls_key], # [[N_a,], ...B]
+                data[self.gt_reg_key], # [det:[N_a, 9] map:[N_m, N_shift=(N_pt-1)*2, N_pt, 2], ...B]
+            ) # [B, K], det:[B, K, 10] map:[B, K, N_pt*2], det:[B, K, 10] map:[B, K, N_pt*2]
             reg_target = reg_target[..., : len(self.reg_weights)]
             reg_target_full = reg_target.clone()
-            mask = torch.logical_not(torch.all(reg_target == 0, dim=-1))
+            mask = torch.logical_not(torch.all(reg_target == 0, dim=-1)) # [B, K]
             mask_valid = mask.clone()
 
             num_pos = max(
@@ -441,21 +441,21 @@ class Sparse4DHead(BaseModule):
                     mask, cls.max(dim=-1).values.sigmoid() > threshold
                 )
 
-            cls = cls.flatten(end_dim=1)
-            cls_target = cls_target.flatten(end_dim=1)
+            cls = cls.flatten(end_dim=1) # [B*K, N_cls]
+            cls_target = cls_target.flatten(end_dim=1) # [B*K,]
             cls_loss = self.loss_cls(cls, cls_target, avg_factor=num_pos)
 
-            mask = mask.reshape(-1)
+            mask = mask.reshape(-1) # [B*K,]
             reg_weights = reg_weights * reg.new_tensor(self.reg_weights)
-            reg_target = reg_target.flatten(end_dim=1)[mask]
+            reg_target = reg_target.flatten(end_dim=1)[mask] # det:[N_pos, 10], map: [N_pos, N_pt*2]
             reg = reg.flatten(end_dim=1)[mask]
-            reg_weights = reg_weights.flatten(end_dim=1)[mask]
+            reg_weights = reg_weights.flatten(end_dim=1)[mask] # det:[N_pos, 10], map: [N_pos, N_pt*2]
             reg_target = torch.where(
                 reg_target.isnan(), reg.new_tensor(0.0), reg_target
             )
-            cls_target = cls_target[mask]
+            cls_target = cls_target[mask] # [N_pos,]
             if qt is not None:
-                qt = qt.flatten(end_dim=1)[mask]
+                qt = qt.flatten(end_dim=1)[mask] # [N_pos, 2]
 
             reg_loss = self.loss_reg(
                 reg,

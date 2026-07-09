@@ -140,7 +140,7 @@ class FlashMHA(nn.Module):
         kv = torch.stack([k, v], dim=2)
         
         context, attn_weights = self.inner_attn(q, kv, key_padding_mask=key_padding_mask, causal=self.causal)
-        return self.out_proj(rearrange(context, 'b s h d -> b s (h d)')), attn_weights
+        return self.out_proj(rearrange(context, 'b s h d -> b s (h d)')), attn_weights # attn_weight is None
 
 
 @ATTENTION.register_module()
@@ -249,7 +249,7 @@ class MultiheadFlashAttention(BaseModule):
         """
         assert attn_mask is None, 'attn mask not supported now.'
         if key is None:
-            key = query
+            key = query # [B, K, 2C]
         if value is None:
             value = key
         if identity is None:
@@ -277,7 +277,7 @@ class MultiheadFlashAttention(BaseModule):
             q=query,
             k=key,
             v=value,
-            key_padding_mask=key_padding_mask)[0]
+            key_padding_mask=key_padding_mask)[0] # [B, K, 2C]
 
         if not self.batch_first:
             out = out.transpose(0, 1)
@@ -289,7 +289,7 @@ def gen_sineembed_for_position(pos_tensor, hidden_dim=256):
     """Mostly copy-paste from https://github.com/IDEA-opensource/DAB-DETR/
     """
     half_hidden_dim = hidden_dim // 2
-    scale = 2 * math.pi
+    scale = 2 * math.pi # its use?
     dim_t = torch.arange(half_hidden_dim, dtype=torch.float32, device=pos_tensor.device)
     dim_t = 10000 ** (2 * (dim_t // 2) / half_hidden_dim)
     x_embed = pos_tensor[..., 0] * scale

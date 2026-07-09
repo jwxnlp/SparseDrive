@@ -14,7 +14,7 @@ class MultiScaleDepthMapGenerator(object):
         self.max_depth = max_depth
 
     def __call__(self, input_dict):
-        points = input_dict["points"][..., :3, None]
+        points = input_dict["points"][..., :3, None] # [N, 3, 1]
         gt_depth = []
         for i, lidar2img in enumerate(input_dict["lidar2img"]):
             H, W = input_dict["img_shape"][i][:2]
@@ -48,7 +48,7 @@ class MultiScaleDepthMapGenerator(object):
                 u = np.floor(U / downsample).astype(np.int32)
                 v = np.floor(V / downsample).astype(np.int32)
                 depth_map = np.ones([h, w], dtype=np.float32) * -1
-                depth_map[v, u] = depths
+                depth_map[v, u] = depths # min depth in each cell
                 gt_depth[j].append(depth_map)
 
         input_dict["gt_depth"] = [np.stack(x) for x in gt_depth]
@@ -119,7 +119,7 @@ class NuScenesSparse4DAdaptor(object):
         self, val: np.ndarray, offset: float = 0.5, period: float = np.pi
     ) -> np.ndarray:
         limited_val = val - np.floor(val / period + offset) * period
-        return limited_val
+        return limited_val # [0, 2*pi] -> [-pi, pi]
 
 
 @PIPELINES.register_module()

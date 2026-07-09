@@ -24,12 +24,12 @@ __all__ = [
 class SparseBox3DEncoder(BaseModule):
     def __init__(
         self,
-        embed_dims,
-        vel_dims=3,
-        mode="add",
-        output_fc=True,
-        in_loops=1,
-        out_loops=2,
+        embed_dims, # [128, 32, 32, 64]
+        vel_dims=3, #-
+        mode="add", # cat
+        output_fc=True, # False
+        in_loops=1, #-
+        out_loops=2, # 4
     ):
         super().__init__()
         assert mode in ["add", "cat"]
@@ -68,7 +68,7 @@ class SparseBox3DEncoder(BaseModule):
             if self.mode == "add":
                 output = output + vel_feat
             elif self.mode == "cat":
-                output = torch.cat([output, vel_feat], dim=-1)
+                output = torch.cat([output, vel_feat], dim=-1) # [..., C]
         if self.output_fc is not None:
             output = self.output_fc(output)
         return output
@@ -100,7 +100,7 @@ class SparseBox3DRefinementModule(BaseModule):
         self.layers = nn.Sequential(
             *linear_relu_ln(embed_dims, 2, 2),
             Linear(self.embed_dims, self.output_dim),
-            Scale([1.0] * self.output_dim),
+            Scale([1.0] * self.output_dim), # why?
         )
         self.with_cls_branch = with_cls_branch
         if with_cls_branch:
@@ -128,8 +128,8 @@ class SparseBox3DRefinementModule(BaseModule):
         time_interval: torch.Tensor = 1.0,
         return_cls=True,
     ):
-        feature = instance_feature + anchor_embed
-        output = self.layers(feature)
+        feature = instance_feature + anchor_embed # [B, K, C]
+        output = self.layers(feature) # [B, K, 11]
         output[..., self.refine_state] = (
             output[..., self.refine_state] + anchor[..., self.refine_state]
         )
@@ -140,17 +140,17 @@ class SparseBox3DRefinementModule(BaseModule):
         if self.output_dim > 8:
             if not isinstance(time_interval, torch.Tensor):
                 time_interval = instance_feature.new_tensor(time_interval)
-            translation = torch.transpose(output[..., VX:], 0, -1)
+            translation = torch.transpose(output[..., VX:], 0, -1) # [3, K, B]
             velocity = torch.transpose(translation / time_interval, 0, -1)
             output[..., VX:] = velocity + anchor[..., VX:]
 
         if return_cls:
             assert self.with_cls_branch, "Without classification layers !!!"
-            cls = self.cls_layers(instance_feature)
+            cls = self.cls_layers(instance_feature) # [B, K, N_cls]
         else:
             cls = None
         if return_cls and self.with_quality_estimation:
-            quality = self.quality_layers(feature)
+            quality = self.quality_layers(feature) # [B, K, 2], centerness, yawness
         else:
             quality = None
         return output, cls, quality
@@ -171,7 +171,7 @@ class SparseBox3DKeyPointsGenerator(BaseModule):
             fix_scale = ((0.0, 0.0, 0.0),)
         self.fix_scale = nn.Parameter(
             torch.tensor(fix_scale), requires_grad=False
-        )
+        ) # [N_fix, 3]
         self.num_pts = len(self.fix_scale) + num_learnable_pts
         if num_learnable_pts > 0:
             self.learnable_fc = Linear(self.embed_dims, num_learnable_pts * 3)
@@ -182,25 +182,25 @@ class SparseBox3DKeyPointsGenerator(BaseModule):
 
     def forward(
         self,
-        anchor,
-        instance_feature=None,
+        anchor, # [B, K, 11]
+        instance_feature=None, # [B, K, C]
         T_cur2temp_list=None,
         cur_timestamp=None,
         temp_timestamps=None,
     ):
         bs, num_anchor = anchor.shape[:2]
-        size = anchor[..., None, [W, L, H]].exp()
-        key_points = self.fix_scale * size
+        size = anchor[..., None, [W, L, H]].exp() # [B, K, 1, 3]
+        key_points = self.fix_scale * size # [B, K, N_fix, 3], object cs
         if self.num_learnable_pts > 0 and instance_feature is not None:
             learnable_scale = (
                 self.learnable_fc(instance_feature)
-                .reshape(bs, num_anchor, self.num_learnable_pts, 3)
+                .reshape(bs, num_anchor, self.num_learnable_pts, 3) # [B, K, N_learn, 3]
                 .sigmoid()
                 - 0.5
             )
             key_points = torch.cat(
                 [key_points, learnable_scale * size], dim=-2
-            )
+            ) # [B, K, N_kpt, 3]
 
         rotation_mat = anchor.new_zeros([bs, num_anchor, 3, 3])
 
@@ -212,8 +212,8 @@ class SparseBox3DKeyPointsGenerator(BaseModule):
 
         key_points = torch.matmul(
             rotation_mat[:, :, None], key_points[..., None]
-        ).squeeze(-1)
-        key_points = key_points + anchor[..., None, [X, Y, Z]]
+        ).squeeze(-1) # [B, K, N_kpt, 3]
+        key_points = key_points + anchor[..., None, [X, Y, Z]] # lidar cs
 
         if (
             cur_timestamp is None
@@ -249,23 +249,23 @@ class SparseBox3DKeyPointsGenerator(BaseModule):
 
     @staticmethod
     def anchor_projection(
-        anchor,
-        T_src2dst_list,
+        anchor, # [B, K_temp, 11]
+        T_src2dst_list, # [[B, 4, 4], ], temp2cur
         src_timestamp=None,
         dst_timestamps=None,
-        time_intervals=None,
+        time_intervals=None, # [[B,], ], -(cur - temp) 
     ):
         dst_anchors = []
         for i in range(len(T_src2dst_list)):
-            vel = anchor[..., VX:]
+            vel = anchor[..., VX:] # [B, K_temp, 3]
             vel_dim = vel.shape[-1]
             T_src2dst = torch.unsqueeze(
                 T_src2dst_list[i].to(dtype=anchor.dtype), dim=1
-            )
+            ) # [B, 1, 4, 4]
 
-            center = anchor[..., [X, Y, Z]]
+            center = anchor[..., [X, Y, Z]] # [B, K_temp, 3]
             if time_intervals is not None:
-                time_interval = time_intervals[i]
+                time_interval = time_intervals[i] # [B,]
             elif src_timestamp is not None and dst_timestamps is not None:
                 time_interval = (src_timestamp - dst_timestamps[i]).to(
                     dtype=vel.dtype
@@ -273,25 +273,25 @@ class SparseBox3DKeyPointsGenerator(BaseModule):
             else:
                 time_interval = None
             if time_interval is not None:
-                translation = vel.transpose(0, -1) * time_interval
-                translation = translation.transpose(0, -1)
+                translation = vel.transpose(0, -1) * time_interval # [3, K_temp, B]
+                translation = translation.transpose(0, -1) # [B, K_temp, 3]
                 center = center - translation
             center = (
                 torch.matmul(
-                    T_src2dst[..., :3, :3], center[..., None]
-                ).squeeze(dim=-1)
-                + T_src2dst[..., :3, 3]
-            )
+                    T_src2dst[..., :3, :3], center[..., None] # [B, K_temp, 3, 1]
+                ).squeeze(dim=-1) # [B, K_temp, 3]
+                + T_src2dst[..., :3, 3] # [B, 1, 3]
+            ) # [B, K_temp, 3]
             size = anchor[..., [W, L, H]]
             yaw = torch.matmul(
                 T_src2dst[..., :2, :2],
-                anchor[..., [COS_YAW, SIN_YAW], None],
-            ).squeeze(-1)
+                anchor[..., [COS_YAW, SIN_YAW], None], # [B, K_temp, 2, 1]
+            ).squeeze(-1) # [B, K_temp, 2]
             yaw = yaw[..., [1,0]]
             vel = torch.matmul(
                 T_src2dst[..., :vel_dim, :vel_dim], vel[..., None]
-            ).squeeze(-1)
-            dst_anchor = torch.cat([center, size, yaw, vel], dim=-1)
+            ).squeeze(-1) # [B, K_temp, 3]
+            dst_anchor = torch.cat([center, size, yaw, vel], dim=-1) # [B, K_temp, 11]
             dst_anchors.append(dst_anchor)
         return dst_anchors
 

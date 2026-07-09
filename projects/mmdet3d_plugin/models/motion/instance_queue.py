@@ -16,9 +16,9 @@ class InstanceQueue(nn.Module):
     def __init__(
         self,
         embed_dims,
-        queue_length=0,
-        tracking_threshold=0,
-        feature_map_scale=None,
+        queue_length=0, # 4
+        tracking_threshold=0, # 0.2
+        feature_map_scale=None, # PV L5
     ):
         super(InstanceQueue, self).__init__()
         self.embed_dims = embed_dims
@@ -45,13 +45,13 @@ class InstanceQueue(nn.Module):
         self.metas = None
         self.prev_instance_id = None
         self.prev_confidence = None
-        self.period = None
-        self.instance_feature_queue = []
-        self.anchor_queue = []
+        self.period = None # [B, det_K], number of frames in queue
+        self.instance_feature_queue = [] # FIFO [[B, det_K, C], ...]
+        self.anchor_queue = [] # [[B, det_K, 11], ...]
         self.prev_ego_status = None
-        self.ego_period = None
-        self.ego_feature_queue = []
-        self.ego_anchor_queue = []
+        self.ego_period = None # [B, 1]
+        self.ego_feature_queue = [] # [B, 1, C]
+        self.ego_anchor_queue = [] # [B, 1, 11]
 
     def get(
         self,
@@ -59,7 +59,7 @@ class InstanceQueue(nn.Module):
         feature_maps,
         metas,
         batch_size,
-        mask,
+        mask, # [B,] # whether cur sample still in sequence
         anchor_handler,
     ):
         if (
@@ -70,11 +70,11 @@ class InstanceQueue(nn.Module):
                 T_temp2cur = feature_maps[0].new_tensor(
                     np.stack(
                         [
-                            x["T_global_inv"]
-                            @ self.metas["img_metas"][i]["T_global"]
+                            x["T_global_inv"] # global2curLidar
+                            @ self.metas["img_metas"][i]["T_global"] # prevLidar2global
                             for i, x in enumerate(metas["img_metas"])
                         ]
-                    )
+                    ) # [B,4,4] prevLidar2curLidar
                 )
                 for i in range(len(self.anchor_queue)):
                     temp_anchor = self.anchor_queue[i]
@@ -97,18 +97,18 @@ class InstanceQueue(nn.Module):
         ego_feature, ego_anchor = self.prepare_planning(feature_maps, mask, batch_size)
 
         # temporal 
-        temp_instance_feature = torch.stack(self.instance_feature_queue, dim=2)
-        temp_anchor = torch.stack(self.anchor_queue, dim=2)
-        temp_ego_feature = torch.stack(self.ego_feature_queue, dim=2)
-        temp_ego_anchor = torch.stack(self.ego_anchor_queue, dim=2)
+        temp_instance_feature = torch.stack(self.instance_feature_queue, dim=2) # [B, det_K, T, C]
+        temp_anchor = torch.stack(self.anchor_queue, dim=2) # [B, det_K, T, 11]
+        temp_ego_feature = torch.stack(self.ego_feature_queue, dim=2) # [B, 1, T, C]
+        temp_ego_anchor = torch.stack(self.ego_anchor_queue, dim=2) # [B, 1, T, 11]
 
-        period = torch.cat([self.period, self.ego_period], dim=1)
-        temp_instance_feature = torch.cat([temp_instance_feature, temp_ego_feature], dim=1)
-        temp_anchor = torch.cat([temp_anchor, temp_ego_anchor], dim=1)
+        period = torch.cat([self.period, self.ego_period], dim=1) # [B, det_K+1]
+        temp_instance_feature = torch.cat([temp_instance_feature, temp_ego_feature], dim=1) # [B, det_K+1, T, C]
+        temp_anchor = torch.cat([temp_anchor, temp_ego_anchor], dim=1) # [B, det_K+1, T, 11]
         num_agent = temp_anchor.shape[1]
         
-        temp_mask = torch.arange(len(self.anchor_queue), 0, -1, device=temp_anchor.device)
-        temp_mask = temp_mask[None, None].repeat((batch_size, num_agent, 1))
+        temp_mask = torch.arange(len(self.anchor_queue), 0, -1, device=temp_anchor.device) # [T]
+        temp_mask = temp_mask[None, None].repeat((batch_size, num_agent, 1)) # [B, det_K+1, T]
         temp_mask = torch.gt(temp_mask, period[..., None])
 
         return ego_feature, ego_anchor, temp_instance_feature, temp_anchor, temp_mask
@@ -122,14 +122,14 @@ class InstanceQueue(nn.Module):
         det_anchors = det_output["prediction"][-1]
 
         if self.period == None:
-            self.period = instance_feature.new_zeros(instance_feature.shape[:2]).long()
+            self.period = instance_feature.new_zeros(instance_feature.shape[:2]).long() # [B, det_K]
         else:
             instance_id = det_output['instance_id']
             prev_instance_id = self.prev_instance_id
             match = instance_id[..., None] == prev_instance_id[:, None]
             if self.tracking_threshold > 0:
                 temp_mask = self.prev_confidence > self.tracking_threshold
-                match = match * temp_mask.unsqueeze(1)
+                match = match * temp_mask.unsqueeze(1) # [B, 1, det_K]
 
             for i in range(len(self.instance_feature_queue)):
                 temp_feature = self.instance_feature_queue[i]
@@ -164,14 +164,14 @@ class InstanceQueue(nn.Module):
         batch_size,
     ):
         ## ego instance init
-        feature_maps_inv = feature_maps_format(feature_maps, inverse=True)
-        feature_map = feature_maps_inv[0][-1][:, 0]
-        ego_feature = self.ego_feature_encoder(feature_map)
-        ego_feature = ego_feature.unsqueeze(1).squeeze(-1).squeeze(-1)
+        feature_maps_inv = feature_maps_format(feature_maps, inverse=True) # [[B, N_view, C, H_f, W_f], ...] L2-L5
+        feature_map = feature_maps_inv[0][-1][:, 0] # [B, C, H_f, W_f], index 0 corresponds to CAM_FRONT
+        ego_feature = self.ego_feature_encoder(feature_map) # [B, C, 1, 1]
+        ego_feature = ego_feature.unsqueeze(1).squeeze(-1).squeeze(-1) # [B, 1, C]
 
         ego_anchor = torch.tile(
             self.ego_anchor[None], (batch_size, 1, 1)
-        )
+        ) # [B, 1, 11]
         if self.prev_ego_status is not None:
             prev_ego_status = torch.where(
                 mask[:, None, None],

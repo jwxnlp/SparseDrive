@@ -23,7 +23,7 @@ class ResizeCropFlipImage(object):
             new_imgs.append(np.array(img).astype(np.float32))
             results["lidar2img"][i] = mat @ results["lidar2img"][i]
             if "cam_intrinsic" in results:
-                results["cam_intrinsic"][i][:3, :3] *= aug_config["resize"]
+                results["cam_intrinsic"][i][:3, :3] *= aug_config["resize"] #  invalid later
                 # results["cam_intrinsic"][i][:3, :3] = (
                 #     mat[:3, :3] @ results["cam_intrinsic"][i][:3, :3]
                 # )
@@ -95,20 +95,20 @@ class BBoxRotation(object):
                 [0, 0, 1, 0],
                 [0, 0, 0, 1],
             ]
-        )
+        ) # lidar cs --> aug lidar cs
         rot_mat_inv = np.linalg.inv(rot_mat)
 
         num_view = len(results["lidar2img"])
         for view in range(num_view):
             results["lidar2img"][view] = (
-                results["lidar2img"][view] @ rot_mat_inv
+                results["lidar2img"][view] @ rot_mat_inv # aug lidar cs --> lidar cs
             )
         if "lidar2global" in results:
             results["lidar2global"] = results["lidar2global"] @ rot_mat_inv
         if "gt_bboxes_3d" in results:
             results["gt_bboxes_3d"] = self.box_rotate(
                 results["gt_bboxes_3d"], angle
-            )
+            ) # lidar cs --> aug lidar cs, not used for map unless no used
         return results
 
     @staticmethod
@@ -116,7 +116,9 @@ class BBoxRotation(object):
         rot_cos = np.cos(angle)
         rot_sin = np.sin(angle)
         rot_mat_T = np.array(
-            [[rot_cos, rot_sin, 0], [-rot_sin, rot_cos, 0], [0, 0, 1]]
+            [[rot_cos, rot_sin, 0], 
+             [-rot_sin, rot_cos, 0], 
+             [0, 0, 1]]
         )
         bbox_3d[:, :3] = bbox_3d[:, :3] @ rot_mat_T
         bbox_3d[:, 6] += angle
